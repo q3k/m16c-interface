@@ -62,6 +62,7 @@ class Top(Module):
                 tclk_counter.eq(tclk_counter + 1),
             )
         ]
+        sclk_divider = Signal(max=1024, reset=1023)
 
         timer = Signal(32)
         timer_running = Signal(reset=0)
@@ -108,7 +109,8 @@ class Top(Module):
                     NextState('SEND_START'),
                 ],
                 ord('R'): [
-                    NextState('FIFO_READ'),
+                    NextState('FIFO_READ_START'),
+                    NextValue(counter, 3),
                 ],
                 ord('t'): [
                     NextState('GET_TIMER'),
@@ -124,6 +126,10 @@ class Top(Module):
                 ],
                 ord('s'): [
                     NextState('SET_TCLK'),
+                ],
+                ord('S'): [
+                    NextState('SET_SCLK'),
+                    NextValue(counter, 1),
                 ],
                 'default': [
                     NextState('RESPOND_BYTE'),
@@ -165,6 +171,17 @@ class Top(Module):
                 NextState('RESPOND_BYTE'),
             )
         )
+        self.fsm.act('SET_SCLK',
+            If(self.uart_rx.readable,
+                NextValue(sclk_divider, (sclk_divider >> 8) | (self.uart_rx.dout << 8)),
+                If(counter == 0,
+                    NextValue(response, ord('.')),
+                    NextState('RESPOND_BYTE'),
+                ).Else(
+                    NextValue(counter, counter-1),
+                )
+            )
+        )
 
         send_byte = Signal(8)
         receive_byte = Signal(8)
@@ -190,7 +207,7 @@ class Top(Module):
 
         self.fsm.act('SEND_WAIT',
             If(~target_busy,
-                NextValue(bit_counter, 1023),
+                NextValue(bit_counter, sclk_divider),
                 NextState('SEND_FALLING'),
             )
         )
@@ -198,7 +215,7 @@ class Top(Module):
             If(bit_counter == 0,
                 NextValue(target.sclk, 0),
                 NextState('SEND_RISING'),
-                NextValue(bit_counter, 1023),
+                NextValue(bit_counter, sclk_divider),
                 NextValue(target.rxd, (send_byte >> bit_index) & 1),
             ).Else(
                 NextValue(bit_counter, bit_counter-1),
@@ -214,7 +231,7 @@ class Top(Module):
                 ).Else(
                     NextValue(bit_index, bit_index+1),
                     NextState('SEND_FALLING'),
-                    NextValue(bit_counter, 1023),
+                    NextValue(bit_counter, sclk_divider),
                 )
             ).Else(
                 NextValue(bit_counter, bit_counter-1),
@@ -223,14 +240,27 @@ class Top(Module):
         self.fsm.act('SEND_WRITEBACK',
             NextState('SEND_PREPARE')
         )
-        self.fsm.act('FIFO_READ',
-            If(self.rxbuffer.readable,
-                NextValue(response, self.rxbuffer.dout),
-            ).Else(
-                NextValue(response, ord('!')),
-            ),
-            NextState('RESPOND_BYTE'),
+
+        fifo_read_counter = Signal(32)
+        self.fsm.act('FIFO_READ_START',
+            If(self.uart_rx.readable,
+                If(counter == 0,
+                    NextState('FIFO_READ'),
+                ).Else(
+                    NextValue(counter, counter-1)
+                ),
+                NextValue(fifo_read_counter, (fifo_read_counter >> 8) | (self.uart_rx.dout << 24))
+            )
         )
+        fifo_read = Signal()
+        self.fsm.act('FIFO_READ',
+            If(fifo_read_counter == 0,
+                NextState('IDLE'),
+            ).Else(
+                NextValue(fifo_read_counter, fifo_read_counter-1),
+            )
+        )
+        self.comb += fifo_read.eq(self.fsm.ongoing('FIFO_READ') & (fifo_read_counter != 0))
 
         self.fsm.act('FIFO_FLUSH',
             If((~self.rxbuffer.readable) & (~self.txbuffer.readable),
@@ -251,7 +281,7 @@ class Top(Module):
 
             self.rxbuffer.we.eq(self.fsm.ongoing('SEND_WRITEBACK')),
             self.rxbuffer.re.eq(
-                self.fsm.ongoing('FIFO_READ') |
+                fifo_read |
                 self.fsm.ongoing('FIFO_FLUSH')
             ),
             self.rxbuffer.din.eq(receive_byte),
@@ -265,17 +295,30 @@ class Top(Module):
             self.uart_rx.re.eq(
                 self.fsm.ongoing('IDLE') |
                 self.fsm.ongoing('FIFO_WRITE') |
-                self.fsm.ongoing('SET_TCLK')
+                self.fsm.ongoing('SET_TCLK') |
+                self.fsm.ongoing('FIFO_READ_START')
             ),
             self.uart_tx.we.eq(
                 self.fsm.ongoing('RESPOND_BYTE') |
-                self.fsm.ongoing('GET_TIMER')
+                self.fsm.ongoing('GET_TIMER') |
+                fifo_read
             ),
             If(self.fsm.ongoing('RESPOND_BYTE'),
                 self.uart_tx.din.eq(response),
             ).Elif(self.fsm.ongoing('GET_TIMER'),
                 self.uart_tx.din.eq(timer >> (counter * 8)),
-            ),
+            ).Elif(fifo_read,
+                If(self.rxbuffer.readable,
+                    self.uart_tx.din.eq(self.rxbuffer.dout),
+                ).Else(
+                    self.uart_tx.din.eq(0xff),
+                ),
+            )
+        ]
+
+        self.comb += [
+            platform.request('debug').eq(self.uart_tx.tx),
+            platform.request('debug').eq(self.uart_rx.rx),
         ]
 
 

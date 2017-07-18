@@ -12,39 +12,32 @@ def flush():
     if s.read() != '.':
         raise Exception('Synchronization error.')
 
+def blocks(data, size=64):
+    for i in range(0, len(data), size):
+        yield data[i:i+size]
+
 def transaction(buf, want):
     """Perform a Serial I/O transaction to the target MCU."""
     #print '->', buf.encode('hex')
     flush()
     cmdlen = len(buf)
     buf += '\xff' * want
-    for c in buf:
-        s.write('w')
-        s.write(c)
-        d = s.read()
-        if d != '.':
+    for block in blocks(buf):
+        for c in block:
+            s.write('w' + c)
+        d = s.read(len(block))
+        if d != '.' * len(block):
             raise Exception('Synchronization error: {}'.format(d))
     s.write('W')
     if s.read() != '.':
         raise Exception('Synchronization error.')
 
-    for _ in range(cmdlen):
-        s.write('R')
-        d = s.read()
-        #print 'drop', d
-    out = ""
-    while len(out) != want:
-        s.write('R')
-        d = s.read()
-        if not d:
-            break
-        out += d
-    #print 'out', out
+    s.write('R' + struct.pack('<I', cmdlen))
+    d = s.read(cmdlen)
 
-    s.write('R')
-    d = s.read()
-    if d != '!':
-        raise Exception('Synchronization error: {}'.format(`d`))
+    out = ""
+    s.write('R' + struct.pack('<I', want))
+    out = s.read(want)
 
     #print '<-', out.encode('hex')
     return out
@@ -68,12 +61,21 @@ def timer():
     s.write('t')
     return struct.unpack('<I', s.read(4))[0]
 
+def set_tclk(val):
+    s.write('s' + chr(val))
+    if s.read() != '.':
+        raise Exception('Synchronization error.')
+
 if version() != 0:
     raise Exception('Invalid version.')
 print 'Connected to programmer.'
 
 reset()
 print 'Reset target.'
+
+set_tclk(4)
+
+sys.exit(0)
 
 
 version = transaction('fb'.decode('hex'), 8)
