@@ -1,3 +1,31 @@
+# Copyright (c) 2017, Serge 'q3k' Bazanski <serge@bazanski.pl>
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#
+# 1. Redistributions of source code must retain the above copyright notice,
+#    this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+"""The main state machine of the adapter."""
+__author__ = "Serge 'q3k' Bazanski <serge@bazanski.pl>"
+
 import sys
 
 from migen import *
@@ -8,10 +36,13 @@ from migen.build.platforms import icestick
 import uart
 
 class Top(Module):
+    # Board clock frequency.
     CLKFREQ = 12000000
+    # Host UART baud rate.
     BAUDRATE = 1200000
 
     def __init__(self, platform):
+        # Instantiate and connect UART cores to host.
         self.submodules.uart_rx = uart.RXFIFO(self.CLKFREQ, self.BAUDRATE)
         self.submodules.uart_tx = uart.TXFIFO(self.CLKFREQ, self.BAUDRATE)
         serial = platform.request('serial')
@@ -20,9 +51,9 @@ class Top(Module):
             self.uart_rx.rx.eq(serial.rx),
         ]
 
+        # Heartbeat LED.
         led = platform.request('user_led')
         counter = Signal(max=12000000)
-
         self.sync += If(counter == 11999999,
             counter.eq(0),
             led.eq(~led),
@@ -39,19 +70,27 @@ class Top(Module):
             target_busy.eq(target.busy),
         ]
 
+        # More debug LEDs.
         self.comb += [
             platform.request('user_led').eq(target.rxd),
             platform.request('user_led').eq(target.txd),
             platform.request('user_led').eq(target.busy),
         ]
 
+        # Input/output FIFOs.
         self.submodules.txbuffer = SyncFIFO(8, 512)
         self.submodules.rxbuffer = SyncFIFO(8, 512)
 
+
+        # Dispatch and response flops for host communication.
         request = Signal(8)
         response = Signal(8)
+        # Generic counter used by a bunch of states.
+        # TODO: share the logic that populates this for sending/receiving
+        # words.
         counter = Signal(max=120000)
 
+        # Target CLK divider.
         tclk_divider = Signal(max=120, reset=4)
         tclk_counter = Signal(max=121)
         self.sync += [
@@ -62,11 +101,13 @@ class Top(Module):
                 tclk_counter.eq(tclk_counter + 1),
             )
         ]
+
+        # Target serial CLK divider, used by the *_EDGE states in the FSM.
         sclk_divider = Signal(max=1024, reset=1023)
 
+        # Target busy timer.
         timer = Signal(32)
         timer_running = Signal(reset=0)
-
         last_busy = Signal()
         self.sync += last_busy.eq(target_busy)
         self.sync += \
@@ -81,6 +122,8 @@ class Top(Module):
                 timer.eq(timer + 1),
             )
 
+        
+        # Main state machine.
         self.submodules.fsm = FSM(reset_state='IDLE')
         self.fsm.act('IDLE',
             If(self.uart_rx.readable,
@@ -90,32 +133,40 @@ class Top(Module):
         )
         self.fsm.act('DISPATCH',
             Case(request, {
+                # Get API version of bitstream.
                 ord('v'): [
                     NextState('RESPOND_BYTE'),
                     NextValue(response, ord('0')),
                 ],
+                # Flush both FIFOs.
                 ord('f'): [
                     NextState('FIFO_FLUSH'),
                 ],
+                # Reset target.
                 ord('r'): [
                     NextState('RESET_TARGET'),
                     NextValue(target.rst, 0),
                     NextValue(counter, 119999),
                 ],
+                # Write byte to FIFO.
                 ord('w'): [
                     NextState('FIFO_WRITE'),
                 ],
+                # Perform transaction with target.
                 ord('W'): [
                     NextState('SEND_START'),
                 ],
+                # Read bytes from FIFO.
                 ord('R'): [
                     NextState('FIFO_READ_START'),
                     NextValue(counter, 3),
                 ],
+                # Get timer value.
                 ord('t'): [
                     NextState('GET_TIMER'),
                     NextValue(counter, 0),
                 ],
+                # Get timer status.
                 ord('T'): [
                     NextState('RESPOND_BYTE'),
                     If(timer_running,
@@ -124,13 +175,16 @@ class Top(Module):
                         NextValue(response, ord('s'))
                     )
                 ],
+                # Set target clock.
                 ord('s'): [
                     NextState('SET_TCLK'),
                 ],
+                # Set target serial clock.
                 ord('S'): [
                     NextState('SET_SCLK'),
                     NextValue(counter, 1),
                 ],
+                # Default handler.
                 'default': [
                     NextState('RESPOND_BYTE'),
                     NextValue(response, ord('?')),
@@ -183,18 +237,25 @@ class Top(Module):
             )
         )
 
+        # Transaction signals.
+        # Byte to be sent to target.
         send_byte = Signal(8)
+        # Byte being received from target.
         receive_byte = Signal(8)
+        # Index into both send and receive bytes.
         bit_index = Signal(max=8)
+        # Downounter for clock rise/fall edges, set to sclk.
         bit_counter = Signal(max=1024)
+        # Rising/falling edge over, move to next state.
         bit_strobe = Signal()
-        next_bit = Signal()
         self.comb += bit_strobe.eq(bit_counter == 0)
+        next_bit = Signal()
 
         self.fsm.act('SEND_START',
             NextState('SEND_PREPARE'),
             NextValue(bit_index, 0),
         )
+        # Prepare next byte to send or finish transaction.
         self.fsm.act('SEND_PREPARE',
             If(self.txbuffer.readable,
                 NextValue(send_byte, self.txbuffer.dout),
@@ -205,12 +266,15 @@ class Top(Module):
             )
         )
 
+        # Wait for target to not be busy.
         self.fsm.act('SEND_WAIT',
             If(~target_busy,
                 NextValue(bit_counter, sclk_divider),
                 NextState('SEND_FALLING'),
             )
         )
+
+        # Downcount bit_counter, send data to target.
         self.fsm.act('SEND_FALLING',
             If(bit_counter == 0,
                 NextValue(target.sclk, 0),
@@ -221,6 +285,7 @@ class Top(Module):
                 NextValue(bit_counter, bit_counter-1),
             )
         )
+        # Downcount bit_counter, receive data from target.
         self.fsm.act('SEND_RISING',
             If(bit_counter == 0,
                 NextValue(receive_byte, (target_txd << 7) | (receive_byte >> 1)),
@@ -237,11 +302,15 @@ class Top(Module):
                 NextValue(bit_counter, bit_counter-1),
             )
         )
+        # Write received byte to read FIFO.
         self.fsm.act('SEND_WRITEBACK',
             NextState('SEND_PREPARE')
         )
 
+        # Downcounter for requested bytes to read from FIFO.
         fifo_read_counter = Signal(32)
+
+        # Set downcounter based on host request.
         self.fsm.act('FIFO_READ_START',
             If(self.uart_rx.readable,
                 If(counter == 0,
@@ -252,7 +321,8 @@ class Top(Module):
                 NextValue(fifo_read_counter, (fifo_read_counter >> 8) | (self.uart_rx.dout << 24))
             )
         )
-        fifo_read = Signal()
+
+        # Downcount fifo_read_counter, send FIFO bytes to host.
         self.fsm.act('FIFO_READ',
             If(fifo_read_counter == 0,
                 NextState('IDLE'),
@@ -260,6 +330,8 @@ class Top(Module):
                 NextValue(fifo_read_counter, fifo_read_counter-1),
             )
         )
+        # Whether the read FIFO should emit a byte - somewhat of a hack.
+        fifo_read = Signal()
         self.comb += fifo_read.eq(self.fsm.ongoing('FIFO_READ') & (fifo_read_counter != 0))
 
         self.fsm.act('FIFO_FLUSH',
@@ -269,6 +341,7 @@ class Top(Module):
             )
         )
 
+        # Enables and data connections for FIFOs.
         self.comb += [
             self.txbuffer.we.eq(
                 self.fsm.ongoing('FIFO_WRITE') & self.uart_rx.readable
@@ -286,11 +359,15 @@ class Top(Module):
             ),
             self.rxbuffer.din.eq(receive_byte),
         ]
+
+        # Generic 1-byte response state.
         self.fsm.act('RESPOND_BYTE',
             If(self.uart_tx.writable,
                 NextState('IDLE'),
             ),
         )
+
+        # Host UART enables.
         self.comb += [
             self.uart_rx.re.eq(
                 self.fsm.ongoing('IDLE') |
@@ -317,6 +394,7 @@ class Top(Module):
             )
         ]
 
+        # Expose Host UART on debug pins.
         self.comb += [
             platform.request('debug').eq(self.uart_tx.tx),
             platform.request('debug').eq(self.uart_rx.rx),
