@@ -296,6 +296,7 @@ class Top(Module):
                 self.fsm.ongoing('IDLE') |
                 self.fsm.ongoing('FIFO_WRITE') |
                 self.fsm.ongoing('SET_TCLK') |
+                self.fsm.ongoing('SET_SCLK') |
                 self.fsm.ongoing('FIFO_READ_START')
             ),
             self.uart_tx.we.eq(
@@ -338,6 +339,8 @@ def main():
     ] + [
         ('debug', i, Pins(str(p)), IOStandard('LVCMOS33')) for i, p in enumerate(debugpins)
     ])
+    # Randomize seed because it doesn't get routed with the default of 1.
+    plat.toolchain.pnr_opt = "-q -r"
     plat.build(Top(plat))
     plat.create_programmer().flash(0, 'build/top.bin')
 
