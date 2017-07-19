@@ -21,7 +21,7 @@ Connect the target and run the 'crack' command.
 
 You'll have to powercycle the target, otherwise it won't unlock, even with the correct code.
 
-Flash dupming
+Flash dumping
 -------------
 
 Connect the target and run the 'dump' command.
