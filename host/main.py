@@ -27,7 +27,8 @@ import argparse
 import logging
 import sys
 
-import adapter, serialio
+import adapter
+import serialio
 
 
 def crack(args, s):
@@ -49,9 +50,10 @@ def crack(args, s):
                 samples.append(s.adapter.busy_timer())
             # Take median time.
             samples = sorted(samples)
-            median = samples[args.samples/3]
+            median = samples[args.samples/2]
             logging.debug("Code {}, times {}, median {}".format(try_byte,
-                samples, median))
+                                                                samples,
+                                                                median))
             byte_times.append(median)
         # For every byte apart from the last one, the correct byte results in
         # a longer busy time.
@@ -93,36 +95,37 @@ def dump(args, s):
 
     with open(args.output, 'w') as f:
         logging.info("Writing pages {:x}-{:x} to {}...".format(start, end,
-            args.output))
+                                                               args.output))
         for page in range(start, end+1):
             logging.debug("Dumping {:x}00-{:x}ff...".format(page, page))
             data = s.read_page(page)
             f.write(data)
 
+
 parser = argparse.ArgumentParser(
         description='Renesas M16C SerialIO Programmer.')
 parser.add_argument('--port', '-p', help='Adapter serial port.',
-        default='/dev/ttyUSB1')
+                    default='/dev/ttyUSB1')
 parser.add_argument('--verbose', '-v', help='Increase output verbosity.',
-        action='store_true')
+                    action='store_true')
 parser.add_argument('--debug-protocol', '-d', help='Log protocol bytes.',
-        action='store_true')
+                    action='store_true')
 parser.add_argument('--debug-adapter', '-D', help='Log adapter bytes.',
-        action='store_true')
+                    action='store_true')
 parser.add_argument('--timestamps', '-t', help='Include timestamps in log.',
-        action='store_true')
+                    action='store_true')
 subparsers = parser.add_subparsers(help='Mode of operation.')
 
 parser_crack = subparsers.add_parser('crack', help='Crack security PIN.')
 parser_crack.add_argument('--samples', help='Samples per byte.', type=int,
-        default=3)
+                          default=3)
 parser_crack.set_defaults(func=crack)
 
 parser_dump = subparsers.add_parser('dump', help='Dump flash memory.')
 parser_dump.add_argument('--output', '-o', help='Output file.', type=str,
-        required=True)
+                         required=True)
 parser_dump.add_argument('--code', '-c', help='Unlock code.', type=str,
-        required=True)
+                         required=True)
 parser_dump.set_defaults(func=dump)
 
 
@@ -151,4 +154,3 @@ if __name__ == '__main__':
     logging.info("Connected to target version {}".format(s.version()))
 
     sys.exit(args.func(args, s) or 0)
-
