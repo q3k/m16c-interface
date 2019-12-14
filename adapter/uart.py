@@ -24,7 +24,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 from migen import Module, Signal, If, FSM, NextState, Cat, NextValue
-from migen.genlib.fifo import SyncFIFO
+from migen.genlib.fifo import SyncFIFOBuffered
 
 class RX(Module):
     def __init__(self, clk_freq, baud_rate):
@@ -92,7 +92,7 @@ class RX(Module):
 class RXFIFO(Module):
     def __init__(self, clk_freq, baud_rate):
         self.submodules.rxcore = RX(clk_freq, baud_rate)
-        self.submodules.fifo = SyncFIFO(8, 1024)
+        self.submodules.fifo = SyncFIFOBuffered(8, 1024)
         self.comb += [
             self.fifo.din.eq(self.rxcore.data)
         ]
@@ -127,7 +127,7 @@ class TXFIFO(Module):
     def __init__(self, clk_freq, baud_rate):
         divisor = clk_freq // baud_rate
 
-        self.submodules.fifo = SyncFIFO(8, 1024)
+        self.submodules.fifo = SyncFIFOBuffered(8, 1024)
         
         self.din = self.fifo.din
         self.we = self.fifo.we
@@ -135,7 +135,7 @@ class TXFIFO(Module):
         self.tx = Signal()
         self.io = { self.din, self.we, self.fifo.writable, self.tx }
 
-        # strobe_counter counts down from divisor to 0, resets automatically
+        # strobe_counter counts down from divisor to 0, resets automatically=
         # or when strobe-start is asserted.
         strobe_counter = Signal(max=divisor)
         strobe_start = Signal()
