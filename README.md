@@ -9,7 +9,14 @@ To build and connect the adapter to the target, see adapter/README.md.
 
 To run the host software to dump the target flash, see host/README.md.
 
-The code has been tested to work against a Renesas M306K9FCLRP pulled from a Toshiba R100 Portege laptop.
+Supported targets
+-----------------
+
+The following targets are know to work with this project:
+
+| Device      | Can dump flash memory | Can recover PIN | Tested by     |
+|-------------|-----------------------|-----------------|---------------|
+| M306K9FCLRP | YES                   | YES             | q3k, joegrand |
 
 License
 -------
