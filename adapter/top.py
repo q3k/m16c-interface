@@ -29,7 +29,7 @@ __author__ = "Serge 'q3k' Bazanski <serge@bazanski.pl>"
 import sys
 
 from migen import *
-from migen.genlib.fifo import SyncFIFO
+from migen.genlib.fifo import SyncFIFOBuffered
 from migen.build.generic_platform import Subsignal, Pins, IOStandard
 from migen.build.platforms import icestick
 
@@ -78,8 +78,8 @@ class Top(Module):
         ]
 
         # Input/output FIFOs.
-        self.submodules.txbuffer = SyncFIFO(8, 512)
-        self.submodules.rxbuffer = SyncFIFO(8, 512)
+        self.submodules.txbuffer = SyncFIFOBuffered(8, 512)
+        self.submodules.rxbuffer = SyncFIFOBuffered(8, 512)
 
 
         # Dispatch and response flops for host communication.
